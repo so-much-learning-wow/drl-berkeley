@@ -7,6 +7,7 @@ import os
 import time
 import inspect
 from multiprocessing import Process
+from tensorflow.contrib.distributions import MultivariateNormalDiag
 
 #============================================================================================#
 # Utilities
@@ -193,14 +194,13 @@ def train_PG(exp_name='',
             axis=1))
     else:
         sy_mean = build_mlp(sy_ob_no, ac_dim, 'policy_mean', n_layers=n_layers, size=size)
-        sy_logstd = build_mlp(sy_ob_no, ac_dim, 'policy_logstd', n_layers=1, size=size)
-        # sy_logstd = tf.Variable(tf.ones([ac_dim]), name='logstd')
+        # sy_logstd = build_mlp(sy_ob_no, ac_dim, 'policy_logstd', n_layers=1, size=size)
+        sy_logstd = tf.Variable(tf.ones([ac_dim]), name='logstd')
 
         # TODO(universome): actually, sy_sampled_ac should have shape [None, ac_dim], not [ac_dim]
         # but as we sample only one action at a time, it works :|
         sy_sampled_ac = sy_mean + tf.multiply(tf.exp(sy_logstd), tf.random_normal([ac_dim]))
-        sy_logprob_n = tf.squeeze(tf.distributions.Normal(sy_mean, tf.exp(sy_logstd)).log_prob(sy_ac_na))
-
+        sy_logprob_n = MultivariateNormalDiag(sy_mean, tf.exp(sy_logstd)).log_prob(sy_ac_na)
 
     #========================================================================================#
     #                           ----------SECTION 4----------
@@ -225,8 +225,11 @@ def train_PG(exp_name='',
                                 size=size))
         # Define placeholders for targets, a loss function and an update op for fitting a
         # neural network baseline. These will be used to fit the neural network baseline.
-        # YOUR_CODE_HERE
-        baseline_update_op = TODO
+
+        # We should fit value function
+        sy_bl_targets = tf.placeholder(shape=[None], name="bl_targets", dtype=tf.float32)
+        bl_loss = tf.losses.mean_squared_error(sy_bl_targets, baseline_prediction)
+        baseline_update_op = tf.train.AdamOptimizer(learning_rate).minimize(bl_loss)
 
 
     #========================================================================================#
@@ -356,7 +359,11 @@ def train_PG(exp_name='',
             # (mean and std) of the current or previous batch of Q-values. (Goes with Hint
             # #bl2 below.)
 
-            b_n = TODO
+            b_n = sess.run([baseline_prediction], feed_dict={sy_ob_no: ob_no})
+            b_n = np.array(b_n).reshape(-1)
+            b_n = (b_n - np.mean(b_n)) / np.std(b_n) # Normalizing
+            b_n = b_n * np.std(q_n) + np.mean(q_n) # Rescaling to match statistics of q_n
+
             adv_n = q_n - b_n
         else:
             adv_n = q_n.copy()
@@ -387,8 +394,7 @@ def train_PG(exp_name='',
             # Hint #bl2: Instead of trying to target raw Q-values directly, rescale the
             # targets to have mean zero and std=1. (Goes with Hint #bl1 above.)
 
-            # YOUR_CODE_HERE
-            pass
+            _ = sess.run([baseline_update_op], feed_dict={sy_ob_no: ob_no, sy_bl_targets: q_n})
 
         #====================================================================================#
         #                           ----------SECTION 4----------
@@ -401,23 +407,22 @@ def train_PG(exp_name='',
         # For debug purposes, you may wish to save the value of the loss function before
         # and after an update, and then log them below.
 
-        # loss_before = loss.eval()
         feed_dict={sy_ob_no: ob_no, sy_ac_na: ac_na, sy_adv_n: adv_n}
         _, loss_value = sess.run([update_op, loss], feed_dict=feed_dict)
 
         # Log diagnostics
         returns = [path["reward"].sum() for path in paths]
         ep_lengths = [pathlength(path) for path in paths]
-        # logz.log_tabular("Time", time.time() - start)
+        logz.log_tabular("Time", time.time() - start)
         logz.log_tabular("Iteration", itr)
         logz.log_tabular("AverageReturn", np.mean(returns))
         logz.log_tabular("StdReturn", np.std(returns))
         logz.log_tabular("MaxReturn", np.max(returns))
         logz.log_tabular("MinReturn", np.min(returns))
-        # logz.log_tabular("EpLenMean", np.mean(ep_lengths))
-        # logz.log_tabular("EpLenStd", np.std(ep_lengths))
-        # logz.log_tabular("TimestepsThisBatch", timesteps_this_batch)
-        # logz.log_tabular("TimestepsSoFar", total_timesteps)
+        logz.log_tabular("EpLenMean", np.mean(ep_lengths))
+        logz.log_tabular("EpLenStd", np.std(ep_lengths))
+        logz.log_tabular("TimestepsThisBatch", timesteps_this_batch)
+        logz.log_tabular("TimestepsSoFar", total_timesteps)
         logz.log_tabular("LossValue", loss_value)
         logz.dump_tabular()
         logz.pickle_tf_vars()
