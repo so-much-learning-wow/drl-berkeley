@@ -62,7 +62,7 @@ def atari_learn(env,
 
     dqn.learn(
         env,
-        q_func=atari_model,
+        atari_model,
         optimizer_spec=optimizer,
         session=session,
         exploration=exploration_schedule,
@@ -89,7 +89,7 @@ def set_global_seeds(i):
     except ImportError:
         pass
     else:
-        tf.set_random_seed(i) 
+        tf.set_random_seed(i)
     np.random.seed(i)
     random.seed(i)
 
@@ -99,7 +99,7 @@ def get_session():
         inter_op_parallelism_threads=1,
         intra_op_parallelism_threads=1)
     session = tf.Session(config=tf_config)
-    print("AVAILABLE GPUS: ", get_available_gpus())
+    # print("AVAILABLE GPUS: ", get_available_gpus())
     return session
 
 def get_env(task, seed):

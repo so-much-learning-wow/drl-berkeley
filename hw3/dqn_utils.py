@@ -321,11 +321,11 @@ class ReplayBuffer(object):
             self.done     = np.empty([self.size],                     dtype=np.bool)
         self.obs[self.next_idx] = frame
 
-        ret = self.next_idx
+        idx = self.next_idx
         self.next_idx = (self.next_idx + 1) % self.size
         self.num_in_buffer = min(self.size, self.num_in_buffer + 1)
 
-        return ret
+        return idx
 
     def store_effect(self, idx, action, reward, done):
         """Store effects of action taken after obeserving frame stored

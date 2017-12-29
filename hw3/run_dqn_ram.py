@@ -30,7 +30,7 @@ def atari_learn(env,
     # This is just a rough estimate
     num_iterations = float(num_timesteps) / 4.0
 
-    lr_multiplier = 1.0 
+    lr_multiplier = 1.0
     lr_schedule = PiecewiseSchedule([
                                          (0,                   1e-4 * lr_multiplier),
                                          (num_iterations / 10, 1e-4 * lr_multiplier),
@@ -58,7 +58,7 @@ def atari_learn(env,
 
     dqn.learn(
         env,
-        q_func=atari_model,
+        atari_model,
         optimizer_spec=optimizer,
         session=session,
         exploration=exploration_schedule,
@@ -85,7 +85,7 @@ def set_global_seeds(i):
     except ImportError:
         pass
     else:
-        tf.set_random_seed(i) 
+        tf.set_random_seed(i)
     np.random.seed(i)
     random.seed(i)
 
@@ -95,7 +95,7 @@ def get_session():
         inter_op_parallelism_threads=1,
         intra_op_parallelism_threads=1)
     session = tf.Session(config=tf_config)
-    print("AVAILABLE GPUS: ", get_available_gpus())
+    # print("AVAILABLE GPUS: ", get_available_gpus())
     return session
 
 def get_env(seed):

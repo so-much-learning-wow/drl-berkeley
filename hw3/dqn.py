@@ -11,7 +11,7 @@ from dqn_utils import *
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
 def learn(env,
-          q_func,
+          nn_model,
           optimizer_spec,
           session,
           exploration=LinearSchedule(1000000, 0.1),
@@ -26,7 +26,7 @@ def learn(env,
           grad_norm_clipping=10):
     """Run Deep Q-learning algorithm.
 
-    You can specify your own convnet using q_func.
+    You can specify your own convnet using nn_model.
 
     All schedules are w.r.t. total number of steps taken in the environment.
 
@@ -34,7 +34,7 @@ def learn(env,
     ----------
     env: gym.Env
         gym environment to train on.
-    q_func: function
+    nn_model: function
         Model to use for computing the q function. It should accept the
         following named arguments:
             img_in: tf.Tensor
@@ -103,7 +103,7 @@ def learn(env,
     # in which case there is no Q-value at the next state; at the end of an
     # episode, only the current state reward contributes to the target, not the
     # next state Q-value (i.e. target is just rew_t_ph, not rew_t_ph + gamma * q_tp1)
-    done_mask_ph          = tf.placeholder(tf.float32, [None])
+    done_mask_ph          = tf.placeholder(tf.uint8, [None])
 
     # casting to float on GPU ensures lower data transfer times.
     obs_t_float   = tf.cast(obs_t_ph,   tf.float32) / 255.0
@@ -121,13 +121,26 @@ def learn(env,
     # These should hold all of the variables of the Q-function network and target network,
     # respectively. A convenient way to get these is to make use of TF's "scope" feature.
     # For example, you can create your Q-function network with the scope "q_func" like this:
-    # <something> = q_func(obs_t_float, num_actions, scope="q_func", reuse=False)
+    # <something> = nn_model(obs_t_float, num_actions, scope="q_func", reuse=False)
     # And then you can obtain the variables like this:
     # q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
     # Older versions of TensorFlow may require using "VARIABLES" instead of "GLOBAL_VARIABLES"
     ######
-    
-    # YOUR CODE HERE
+
+    q_func = nn_model(obs_t_float, num_actions, scope="q_func")
+    target_q_func = nn_model(obs_tp1_float, num_actions, scope="target_q_func")
+
+    curr_ac_q_vals_n = tf.reduce_sum(tf.multiply(q_func, tf.one_hot(act_t_ph, depth=num_actions)), axis=1)
+    next_ac_q_vals_n = tf.reduce_max(target_q_func, axis=1)
+
+    # Let's invert bits for simpler usage
+    not_done_mask = tf.cast(tf.equal(done_mask_ph, 0), tf.float32)
+
+    targets = rew_t_ph + gamma * tf.multiply(next_ac_q_vals_n, not_done_mask)
+    total_error = tf.losses.mean_squared_error(targets, curr_ac_q_vals_n)
+
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='target_q_func')
 
     ######
 
@@ -150,12 +163,15 @@ def learn(env,
     ###############
     # RUN ENV     #
     ###############
-    model_initialized = False
     num_param_updates = 0
     mean_episode_reward      = -float('nan')
     best_mean_episode_reward = -float('inf')
     last_obs = env.reset()
     LOG_EVERY_N_STEPS = 10000
+    done = False
+
+    session.run(tf.global_variables_initializer())
+    session.run(update_target_fn)
 
     for t in itertools.count():
         ### 1. Check stopping criterion
@@ -193,8 +209,25 @@ def learn(env,
         # might as well be random, since you haven't trained your net...)
 
         #####
-        
-        # YOUR CODE HERE
+
+        idx = replay_buffer.store_frame(last_obs)
+
+        encoded_last_obs = replay_buffer.encode_recent_observation()
+        encoded_last_obs = encoded_last_obs.reshape([1] + list(encoded_last_obs.shape))
+
+        if np.random.binomial(1, exploration.value(t)) is 0:
+            ac_vals = session.run([q_func], feed_dict={obs_t_ph: encoded_last_obs})
+            action = np.argmax(ac_vals)
+        else:
+            action = random.randint(0, num_actions-1)
+
+        if done:
+            obs, reward, done = env.reset(), 0, False
+        else:
+            obs, reward, done, _ = env.step(action)
+
+        replay_buffer.store_effect(idx, action, reward, done)
+        last_obs = obs
 
         #####
 
@@ -243,22 +276,40 @@ def learn(env,
             # you should update every target_update_freq steps, and you may find the
             # variable num_param_updates useful for this (it was initialized to 0)
             #####
-            
-            # YOUR CODE HERE
+
+            obs_batch, act_batch, rew_batch, next_obs_batch, done_mask = replay_buffer.sample(batch_size)
+            mse, _ = session.run([total_error, train_fn], feed_dict={
+                obs_t_ph: obs_batch,
+                act_t_ph: act_batch,
+                rew_t_ph: rew_batch,
+                obs_tp1_ph: next_obs_batch,
+                done_mask_ph: done_mask,
+                learning_rate: optimizer_spec.lr_schedule.value(t)
+            })
+
+
+            if num_param_updates % target_update_freq == 0:
+                session.run(update_target_fn)
+                print('Updated target network!')
+
+            num_param_updates += 1
 
             #####
 
         ### 4. Log progress
         episode_rewards = get_wrapper_by_name(env, "Monitor").get_episode_rewards()
+
         if len(episode_rewards) > 0:
             mean_episode_reward = np.mean(episode_rewards[-100:])
-        if len(episode_rewards) > 100:
             best_mean_episode_reward = max(best_mean_episode_reward, mean_episode_reward)
-        if t % LOG_EVERY_N_STEPS == 0 and model_initialized:
-            print("Timestep %d" % (t,))
-            print("mean reward (100 episodes) %f" % mean_episode_reward)
-            print("best mean reward %f" % best_mean_episode_reward)
-            print("episodes %d" % len(episode_rewards))
-            print("exploration %f" % exploration.value(t))
-            print("learning_rate %f" % optimizer_spec.lr_schedule.value(t))
+
+        if t % LOG_EVERY_N_STEPS == 0:
+            print('Timestep: %d' % (t,))
+            print('Mean reward: %f' % mean_episode_reward)
+            if t > learning_starts: print('MSE:', mse)
+            print('Currently best mean reward: %f' % best_mean_episode_reward)
+            print('Episodes: %d' % len(episode_rewards))
+            print('Exploration: %f' % exploration.value(t))
+            print('Learning rate: %f' % optimizer_spec.lr_schedule.value(t))
+            print()
             sys.stdout.flush()
